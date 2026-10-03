@@ -1,1 +1,46 @@
-# game-hours
+# Game Hours
+
+Small read-only Windows desktop app (Python + PySide6 / QtCharts) that shows your game hours,
+finished games, progress and auto-tracked sessions. It never writes to your data files. The only
+file it writes is its own `%APPDATA%\GameHours\settings.json` (chosen file paths).
+
+No tray, no background process, no autostart. Data is re-read on every start and when you press **Refresh**.
+
+## Install
+
+1. Install Python 3.10+ (tick "Add python.exe to PATH").
+2. Double-click `install.bat`. It runs `pip install -r requirements.txt` and creates a
+   **Game Hours** shortcut on your Desktop that launches `pythonw.exe gamehours.py` (no console).
+
+Or run manually: `pip install -r requirements.txt` then `python gamehours.py`.
+
+## Files
+
+Looked up on your real Desktop (OneDrive-safe, via `SHGetKnownFolderPath`):
+
+| File | Used for |
+|---|---|
+| `fxgameanalasys.txt` | progress / finished log |
+| `hour log.txt` | manual all-time hours |
+| `auto_game_sessions.txt` | sessions from the separate tracker, `2026-10-03 \| 23:26-23:37 \| osu! \| 10m` |
+
+If a file is missing, the tab shows a message with a **Choose file** button. The chosen path is remembered
+in `%APPDATA%\GameHours\settings.json`. Encodings tried: UTF-8 (with/without BOM), UTF-16 (if BOM), then cp1257.
+
+## Notes on parsing
+
+- Nothing is dropped: every parsed item keeps its raw line (shown as a tooltip on the first column);
+  unparseable lines show raw text with empty fields. Malformed lines in `auto_game_sessions.txt` are skipped.
+- Manual and auto-tracked hours are separate columns and never summed. They are matched by exact normalized
+  name only (lowercase, non-alphanumerics removed).
+- Story lines with a `+N` suffix (`gta 5+1`) are treated as replays; the number stays in the name and no hours are read.
+- Lines in FINISHED before any `/story` or `/cars` marker are treated as story. Car lines without a trailing
+  2-digit year are listed under "Earlier".
+- "This week" is Monday to Sunday.
+
+## Tests
+
+```
+pip install pytest
+python -m pytest
+```
