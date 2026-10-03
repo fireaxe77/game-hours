@@ -170,6 +170,7 @@ class AppData:
     fx: P.FxData = field(default_factory=P.FxData)
     sessions: list = field(default_factory=list)
     problems: dict = field(default_factory=dict)  # key -> message
+    alias_error: str | None = None
 
 
 def load_all(settings: dict) -> AppData:
@@ -188,6 +189,15 @@ def load_all(settings: dict) -> AppData:
             continue
         attr, parse = parsers[key]
         setattr(data, attr, parse(text))
+
+    aliases = {}
+    try:
+        aliases, data.alias_error = P.parse_aliases(P.read_text(HERE / "aliases.json"))
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        data.alias_error = f"Cannot read aliases.json: {e}"
+    P.apply_hour_log(data.fx, data.hours, aliases)
     return data
 
 
@@ -369,6 +379,17 @@ def group_box(title: str, widget: QWidget) -> QWidget:
 
 
 # ---------------------------------------------------------------- tabs
+class Notice(QFrame):
+    def __init__(self, message):
+        super().__init__()
+        self.setObjectName("Notice")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 12, 12, 12)
+        label = QLabel(message)
+        label.setWordWrap(True)
+        row.addWidget(label, 1)
+
+
 class MissingBar(QFrame):
     def __init__(self, key, message, on_choose):
         super().__init__()
@@ -386,6 +407,7 @@ class MissingBar(QFrame):
 class Tab(QWidget):
     """Missing-file bars on top, tab content (self.body) below."""
     keys: tuple = ()
+    uses_aliases = False
 
     def __init__(self, win):
         super().__init__()
@@ -405,6 +427,8 @@ class Tab(QWidget):
         for key in self.keys:
             if key in data.problems:
                 self.bars.addWidget(MissingBar(key, data.problems[key], self.win.choose_file))
+        if self.uses_aliases and data.alias_error:
+            self.bars.addWidget(Notice(data.alias_error))
         self.populate(data)
 
     def populate(self, data: AppData) -> None:
@@ -456,8 +480,15 @@ class HoursTab(Tab):
             self.table.setRowHidden(r, bool(q) and q not in text)
 
 
+def finished_hours_text(s: P.StoryItem) -> str:
+    if s.total_hours is None:
+        return ""
+    return ("~" if s.estimate else "") + P.fmt_num(s.total_hours, 1) + (" (hour log)" if s.from_log else "")
+
+
 class FinishedTab(Tab):
-    keys = ("fx",)
+    keys = ("fx", "hours")
+    uses_aliases = True
 
     def __init__(self, win):
         super().__init__(win)
@@ -498,7 +529,7 @@ class FinishedTab(Tab):
         story = [s for s in self.fx.story if s.year == key]
         cars = [c for c in self.fx.cars if c.year == key]
         fill_table(self.story, [
-            [s.name, ("~" if s.estimate else "") + P.fmt_num(s.hours, 1) if s.hours is not None else "",
+            [s.name, finished_hours_text(s),
              str(s.replays) if s.replays else ""] for s in story], [s.raw for s in story])
         fill_table(self.cars, [[c.name, f"x{c.played}" if c.played else ""] for c in cars],
                    [c.raw for c in cars])
@@ -571,7 +602,8 @@ class AutoLogTab(Tab):
 
 
 class RecapTab(Tab):
-    keys = ("fx", "sessions")
+    keys = ("fx", "sessions", "hours")
+    uses_aliases = True
 
     def __init__(self, win):
         super().__init__(win)
@@ -607,11 +639,11 @@ class RecapTab(Tab):
         key = self.combo.currentData()
         self.text.setPlainText("" if key is None else P.recap_text(key, self.data.fx, self.data.sessions))
         story = [x for x in self.data.fx.story if x.year == key]
-        known = [x for x in story if x.hours is not None]
+        known = [x for x in story if x.total_hours is not None]
         approx = "~" if any(x.estimate for x in known) else ""
         self.cards["Story games"].setText(str(len(story)))
         self.cards["Car games"].setText(str(sum(1 for c in self.data.fx.cars if c.year == key)))
-        self.cards["Known hours"].setText(f"{approx}{P.fmt_num(sum(x.hours for x in known), 1)}h")
+        self.cards["Known hours"].setText(f"{approx}{P.fmt_num(sum(x.total_hours for x in known), 1)}h")
 
     def copy(self):
         QApplication.clipboard().setText(self.text.toPlainText())

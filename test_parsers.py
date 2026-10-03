@@ -270,3 +270,81 @@ def test_never_crash_on_garbage_bytes(tmp_path):
     P.parse_hours(text)
     P.parse_fx(text)
     P.parse_sessions(text)
+
+
+# --------------------------------------------------- hour log fallback
+def _fallback(fx_text, log_text, aliases=None):
+    fx = P.parse_fx(fx_text)
+    P.apply_hour_log(fx, P.parse_hours(log_text), aliases)
+    return {s.name: s for s in fx.story}
+
+
+FINISHED_2025 = "--- FINISHED ---\n/story\n2025\n"
+
+
+def test_fallback_uses_hour_log_and_marks_it():
+    s = _fallback(FINISHED_2025 + "hades\nsome unknown game\n", "hades 42 (steam)\n")
+    assert (s["hades"].hours, s["hades"].log_hours, s["hades"].total_hours, s["hades"].from_log) == (None, 42, 42, True)
+    assert s["some unknown game"].total_hours is None and not s["some unknown game"].from_log
+
+
+def test_own_hours_win_over_hour_log():
+    s = _fallback("--- FINISHED ---\n/story\n2026\nhades 10\n", "hades 42\n")
+    assert (s["hades"].total_hours, s["hades"].from_log) == (10, False)
+
+
+def test_exact_normalized_match_only():
+    s = _fallback(FINISHED_2025 + "GTA 5\nf1 2024\n", "gta5 480\nf1 2025 30\n")
+    assert s["GTA 5"].total_hours == 480
+    assert s["f1 2024"].total_hours is None
+
+
+def test_aliases():
+    log = "yakuza lad 60\nsp2 20\nHonkaiSR 300\nFC5 25\nzenless zone zero 90\n"
+    text = FINISHED_2025 + "Yakuza Like A Dragon\nspiderman 2\nhsr\nfar cry 5\nzzz\nunaliased\n"
+    aliases = {"yakuza like a dragon": "yakuza lad", "spiderman 2": "sp2", "hsr": "HonkaiSR",
+               "far cry 5": "FC5", "zzz": "zenless zone zero"}
+    s = _fallback(text, log, aliases)
+    assert [s[n].total_hours for n in ("Yakuza Like A Dragon", "spiderman 2", "hsr", "far cry 5", "zzz")] == [60, 20, 300, 25, 90]
+    assert s["unaliased"].total_hours is None
+    assert _fallback(FINISHED_2025 + "spiderman 2\n", log)["spiderman 2"].total_hours is None  # no alias, no match
+
+
+def test_replay_word_stripped_before_matching():
+    assert P.strip_replay("hades replay 2nd run") == "hades"
+    assert P.strip_replay("Hades REPLAY") == "Hades"
+    assert P.strip_replay("replayability") == "replayability"
+    s = _fallback(FINISHED_2025 + "hades replay\nspiderman 2 replay 2\n", "hades 42\nsp2 20\n", {"spiderman 2": "sp2"})
+    assert s["hades replay"].total_hours == 42
+    assert s["spiderman 2 replay 2"].total_hours == 20
+
+
+def test_duplicate_hour_log_uses_first_occurrence():
+    s = _fallback(FINISHED_2025 + "hades\n", "hades 42\nhades 99\n")
+    assert s["hades"].total_hours == 42
+
+
+def test_hour_log_entry_without_hours_gives_no_fallback():
+    s = _fallback(FINISHED_2025 + "hades\n", "hades steamhrs+10\n")
+    assert s["hades"].total_hours is None
+
+
+def test_recap_includes_fallback_hours():
+    fx = P.parse_fx("--- FINISHED ---\n/story\n2026\nhades\nmiside 4\nnohours\n")
+    P.apply_hour_log(fx, P.parse_hours("hades 42\n"))
+    t = P.recap_text(2026, fx, [])
+    assert "hades (42h (hour log))" in t
+    assert "Known hours: 46h (1 game without hours)" in t
+
+
+def test_parse_aliases():
+    assert P.parse_aliases('{"a": "b", "c": 3}') == ({"a": "b"}, None)
+    assert P.parse_aliases("{bad")[1]
+    assert P.parse_aliases("[1]")[1]
+
+
+def test_seed_aliases_file():
+    import pathlib
+    aliases, err = P.parse_aliases(P.read_text(pathlib.Path(__file__).parent / "aliases.json"))
+    assert err is None
+    assert aliases["hsr"] == "HonkaiSR" and aliases["ac origins"] == "aco" and len(aliases) == 13

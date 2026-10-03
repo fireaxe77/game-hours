@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import codecs
 import datetime as dt
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -147,6 +148,16 @@ class StoryItem:
     hours: float | None = None
     estimate: bool = False
     replays: int = 0
+    log_hours: float | None = None  # fallback from hour log.txt, see apply_hour_log()
+
+    @property
+    def total_hours(self) -> float | None:
+        """Own hours always win; otherwise the hour-log fallback."""
+        return self.hours if self.hours is not None else self.log_hours
+
+    @property
+    def from_log(self) -> bool:
+        return self.hours is None and self.log_hours is not None
 
 
 @dataclass
@@ -264,6 +275,47 @@ def parse_fx(text: str) -> FxData:
     return fx
 
 
+_REPLAY_WORD = re.compile(r"\s*\breplay\b.*$", re.I)
+
+
+def strip_replay(name: str) -> str:
+    """Drop the word "replay" and everything after it."""
+    return _REPLAY_WORD.sub("", name)
+
+
+def parse_aliases(text: str) -> tuple[dict[str, str], str | None]:
+    """aliases.json -> ({finished name: hour log name}, error message or None)."""
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {}, f"aliases.json is not valid JSON: {e}"
+    if not isinstance(data, dict):
+        return {}, 'aliases.json must be an object like {"finished name": "hour log name"}'
+    return {k: v for k, v in data.items() if isinstance(v, str)}, None
+
+
+def apply_hour_log(fx: FxData, hours: Iterable[HourEntry], aliases: dict[str, str] | None = None) -> None:
+    """Fill StoryItem.log_hours for finished entries that have no hours of their own.
+
+    Finished name -> strip "replay..." -> normalize -> alias (normalized) -> exact match
+    against hour log names. The first hour log line wins when a game appears twice.
+    """
+    amap = {normalize(k): normalize(v) for k, v in (aliases or {}).items() if normalize(k)}
+    index: dict[str, HourEntry] = {}
+    for e in hours:
+        key = normalize(e.name)
+        if key:
+            index.setdefault(key, e)
+    for s in fx.story:
+        s.log_hours = None
+        if s.hours is not None:
+            continue
+        key = normalize(strip_replay(s.name))
+        entry = index.get(amap.get(key, key)) if key else None
+        if entry is not None:
+            s.log_hours = entry.hours
+
+
 def year_keys(fx: FxData, extra_years: Iterable[int] = ()) -> list[int | str]:
     """["Earlier" (if used), then years ascending]."""
     years = {i.year for i in fx.story if isinstance(i.year, int)}
@@ -369,16 +421,17 @@ def top_auto_games(sessions: Iterable[Session], year: int, limit: int = 10) -> l
 def recap_text(year: int | str, fx: FxData, sessions: list[Session]) -> str:
     story = [s for s in fx.story if s.year == year]
     cars = [c for c in fx.cars if c.year == year]
-    known = [s for s in story if s.hours is not None]
-    total = sum(s.hours for s in known)
+    known = [s for s in story if s.total_hours is not None]
+    total = sum(s.total_hours for s in known)
     approx = "~" if any(s.estimate for s in known) else ""
     missing = len(story) - len(known)
 
     lines = [f"Recap {year}", "", f"Story games finished: {len(story)}"]
     for s in story:
         bits = []
-        if s.hours is not None:
-            bits.append(("~" if s.estimate else "") + fmt_num(s.hours, 1) + "h")
+        if s.total_hours is not None:
+            bits.append(("~" if s.estimate else "") + fmt_num(s.total_hours, 1) + "h"
+                        + (" (hour log)" if s.from_log else ""))
         if s.replays:
             bits.append(f"+{s.replays} replay" + ("s" if s.replays > 1 else ""))
         lines.append(f"  - {s.name}" + (f" ({', '.join(bits)})" if bits else ""))
