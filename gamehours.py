@@ -8,15 +8,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCharts import (QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView,
-                              QValueAxis)
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPalette
-from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGroupBox,
+from PySide6.QtCharts import (QAbstractBarSeries, QBarCategoryAxis, QBarSeries, QBarSet, QChart,
+                              QChartView, QValueAxis)
+from PySide6.QtCore import QEvent, QMargins, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPen
+from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
                                QProgressBar, QPushButton, QScrollArea, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
-                               QVBoxLayout, QWidget, QAbstractItemView)
+                               QStyledItemDelegate, QTableWidget, QTableWidgetItem,
+                               QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+                               QAbstractItemView)
 
 import parsers as P
 
@@ -25,6 +26,84 @@ FILES = {
     "hours": ("hour log.txt", "Hour log"),
     "sessions": ("auto_game_sessions.txt", "Auto session log"),
 }
+
+HERE = Path(__file__).resolve().parent
+
+BG, PANEL, ALT, HOVER = "#1E1F22", "#2B2D31", "#303338", "#383B41"
+TEXT, MUTED, BORDER = "#DBDEE1", "#949BA4", "#3A3C42"
+ACCENT, ACCENT_LIGHT, ACCENT_SEL = "#7C5CFF", "#B7A5FF", "#4A3E99"
+ROW_HEIGHT = 28
+
+STYLE = """
+* { font-family: "Segoe UI"; font-size: 10pt; }
+QWidget { background: %BG%; color: %TEXT%; }
+QLabel { background: transparent; }
+QLabel#Title { font-size: 14pt; font-weight: 600; }
+QScrollArea { border: none; }
+
+QTabWidget::pane { border: none; }
+QTabBar { background: transparent; }
+QTabBar::tab { background: transparent; color: %MUTED%; padding: 10px 16px; margin-right: 4px;
+               border: none; border-bottom: 2px solid transparent; }
+QTabBar::tab:hover { color: %TEXT%; }
+QTabBar::tab:selected { color: %TEXT%; border-bottom: 2px solid %ACCENT%; }
+
+QPushButton { background: %PANEL%; color: %TEXT%; border: none; border-radius: 8px; padding: 8px 16px; }
+QPushButton:hover { background: %HOVER%; }
+QPushButton:pressed { background: %BORDER%; }
+QPushButton#Accent { background: %ACCENT%; color: #FFFFFF; font-weight: 600; }
+QPushButton#Accent:hover { background: #8F74FF; }
+QPushButton#Accent:pressed { background: #6A4BE6; }
+
+QLineEdit, QComboBox { background: %PANEL%; border: 1px solid %BORDER%; border-radius: 8px;
+                       padding: 7px 12px; selection-background-color: %ACCENT%; }
+QLineEdit:focus, QComboBox:focus, QComboBox:on { border: 1px solid %ACCENT%; }
+QComboBox::drop-down { border: none; background: transparent; width: 28px; }
+QComboBox QAbstractItemView { background: %PANEL%; border: 1px solid %BORDER%; outline: 0;
+                              selection-background-color: %ACCENT%; }
+
+
+QFrame#Card { background: %PANEL%; border-radius: 10px; }
+QLabel#CardValue { font-size: 24pt; font-weight: 600; color: %TEXT%; }
+QLabel#CardLabel { color: %MUTED%; }
+QFrame#Notice { background: %PANEL%; border-radius: 10px; border-left: 3px solid %ACCENT%; }
+QTextEdit { background: %PANEL%; border: none; border-radius: 10px; padding: 12px; }
+
+QTableWidget { background: %PANEL%; alternate-background-color: %ALT%; border: none; border-radius: 10px;
+               gridline-color: transparent; outline: 0;
+               selection-background-color: %ACCENT_SEL%; selection-color: %TEXT%; }
+QTableWidget::item { padding: 0 8px; border: none; }
+QTableWidget::item:selected { background: %ACCENT_SEL%; color: %TEXT%; }
+QHeaderView { background: %PANEL%; border: none; }
+QHeaderView::section { background: %PANEL%; color: %MUTED%; font-weight: 700; border: none;
+                       padding: 6px 8px; }
+QTableCornerButton::section { background: %PANEL%; border: none; }
+
+QProgressBar { background: %BG%; border: none; border-radius: 8px; text-align: center;
+               color: #FFFFFF; margin: 5px 8px; min-height: 18px; max-height: 18px; }
+QProgressBar::chunk { background: %ACCENT%; border-radius: 8px; }
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle { background: %BORDER%; border-radius: 5px; min-height: 24px; min-width: 24px; }
+QScrollBar::handle:hover { background: %MUTED%; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 12px; }
+QSplitter::handle:vertical { height: 12px; }
+QToolTip { background: %PANEL%; color: %TEXT%; border: 1px solid %BORDER%; padding: 4px; }
+"""
+for _name, _value in (("BG", BG), ("PANEL", PANEL), ("ALT", ALT), ("HOVER", HOVER), ("TEXT", TEXT),
+                      ("MUTED", MUTED), ("BORDER", BORDER), ("ACCENT_SEL", ACCENT_SEL),
+                      ("ACCENT", ACCENT)):
+    STYLE = STYLE.replace(f"%{_name}%", _value)
+
+
+def load_icon() -> QIcon:
+    icon = QIcon(str(HERE / "icon.ico"))
+    return icon if not icon.isNull() else QIcon(str(HERE / "icon.png"))
 
 
 # ---------------------------------------------------------------- paths / settings
@@ -113,8 +192,43 @@ def load_all(settings: dict) -> AppData:
 
 
 # ---------------------------------------------------------------- widget helpers
+class HoverDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        if index.row() == self.parent().hover_row and not option.state & option.state.State_Selected:
+            painter.fillRect(option.rect, QColor(HOVER))
+        super().paint(painter, option, index)
+
+
+class HoverTable(QTableWidget):
+    """Table that highlights the whole row under the mouse."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.hover_row = -1
+        self.setMouseTracking(True)
+        self.setItemDelegate(HoverDelegate(self))
+
+    def _set_hover(self, row):
+        if row != self.hover_row:
+            self.hover_row = row
+            self.viewport().update()
+
+    def mouseMoveEvent(self, e):
+        self._set_hover(self.rowAt(int(e.position().y())))
+        super().mouseMoveEvent(e)
+
+    def viewportEvent(self, e):
+        if e.type() == QEvent.Leave:
+            self._set_hover(-1)
+        return super().viewportEvent(e)
+
+
 def make_table(headers, stretch_col=0) -> QTableWidget:
-    t = QTableWidget(0, len(headers))
+    t = HoverTable(0, len(headers))
+    t.setShowGrid(False)
+    t.setFrameShape(QFrame.NoFrame)
+    t.verticalHeader().setDefaultSectionSize(ROW_HEIGHT)
+    t.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
     t.setHorizontalHeaderLabels(headers)
     t.setEditTriggers(QAbstractItemView.NoEditTriggers)
     t.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -153,6 +267,8 @@ def build_chart(title, categories, sets, angle=0) -> QChart:
         series.append(bar)
         top = max([top] + values)
     series.setLabelsVisible(True)
+    series.setLabelsPosition(QAbstractBarSeries.LabelsOutsideEnd)
+    series.setBarWidth(0.6)
     chart.addSeries(series)
 
     cat_axis = QBarCategoryAxis()
@@ -167,12 +283,36 @@ def build_chart(title, categories, sets, angle=0) -> QChart:
     series.attachAxis(cat_axis)
     series.attachAxis(val_axis)
     chart.legend().setVisible(len(sets) > 1)
+
+    # styling (after adding series/axes so the theme does not override it)
+    small = QFont("Segoe UI", 9)
+    chart.setBackgroundBrush(QColor(PANEL))
+    chart.setBackgroundPen(QPen(Qt.NoPen))
+    chart.setBackgroundRoundness(10)
+    chart.setMargins(QMargins(12, 12, 12, 12))
+    chart.setTitleBrush(QColor(TEXT))
+    chart.setTitleFont(QFont("Segoe UI", 14, QFont.DemiBold))
+    chart.legend().setLabelColor(QColor(MUTED))
+    chart.legend().setFont(small)
+    for axis in (cat_axis, val_axis):
+        axis.setLabelsColor(QColor(MUTED))
+        axis.setLabelsFont(small)
+        axis.setLinePen(QPen(QColor(BORDER)))
+        axis.setGridLineColor(QColor(BORDER))
+    cat_axis.setGridLineVisible(False)
+    for bar, color in zip(series.barSets(), (ACCENT, ACCENT_LIGHT)):
+        bar.setColor(QColor(color))
+        bar.setBorderColor(QColor(color))
+        bar.setLabelColor(QColor(TEXT))
+        bar.setLabelFont(small)
     return chart
 
 
 def make_chart_view() -> QChartView:
     view = QChartView()
     view.setRenderHint(QPainter.Antialiasing)
+    view.setFrameShape(QFrame.NoFrame)
+    view.setBackgroundBrush(QColor(BG))
     view.setMinimumHeight(260)
     return view
 
@@ -197,12 +337,44 @@ def clear_layout(layout) -> None:
             w.deleteLater()
 
 
+def make_card(caption: str):
+    """Rounded panel with a big number and a small muted label. Returns (card, value_label)."""
+    card = QFrame()
+    card.setObjectName("Card")
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(16, 16, 16, 16)
+    lay.setSpacing(4)
+    value = QLabel("0")
+    value.setObjectName("CardValue")
+    value.setAlignment(Qt.AlignCenter)
+    label = QLabel(caption)
+    label.setObjectName("CardLabel")
+    label.setAlignment(Qt.AlignCenter)
+    lay.addWidget(value)
+    lay.addWidget(label)
+    return card, value
+
+
+def group_box(title: str, widget: QWidget) -> QWidget:
+    """A 14pt semibold heading above a (self-paneled) widget."""
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    heading = QLabel(title)
+    heading.setObjectName("Title")
+    lay.addWidget(heading)
+    lay.addWidget(widget, 1)
+    return box
+
+
 # ---------------------------------------------------------------- tabs
 class MissingBar(QFrame):
     def __init__(self, key, message, on_choose):
         super().__init__()
-        self.setFrameShape(QFrame.StyledPanel)
+        self.setObjectName("Notice")
         row = QHBoxLayout(self)
+        row.setContentsMargins(16, 12, 12, 12)
         label = QLabel(message)
         label.setWordWrap(True)
         row.addWidget(label, 1)
@@ -219,9 +391,13 @@ class Tab(QWidget):
         super().__init__()
         self.win = win
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 12, 0, 0)
+        outer.setSpacing(12)
         self.bars = QVBoxLayout()
+        self.bars.setSpacing(8)
         outer.addLayout(self.bars)
         self.body = QVBoxLayout()
+        self.body.setSpacing(12)
         outer.addLayout(self.body, 1)
 
     def refresh(self, data: AppData) -> None:
@@ -298,9 +474,7 @@ class FinishedTab(Tab):
         self.story = make_table(["Story game", "Hours", "Replays"])
         self.cars = make_table(["Car game", "Played"])
         for title, table in (("Story", self.story), ("Cars", self.cars)):
-            box = QGroupBox(title)
-            QVBoxLayout(box).addWidget(table)
-            split.addWidget(box)
+            split.addWidget(group_box(title, table))
         outer = QSplitter(Qt.Vertical)
         outer.addWidget(split)
         self.view = make_chart_view()
@@ -339,6 +513,8 @@ class InProgressTab(Tab):
         scroll.setWidgetResizable(True)
         self.holder = QWidget()
         self.groups = QVBoxLayout(self.holder)
+        self.groups.setContentsMargins(0, 0, 0, 0)
+        self.groups.setSpacing(12)
         scroll.setWidget(self.holder)
         self.body.addWidget(scroll)
 
@@ -347,13 +523,10 @@ class InProgressTab(Tab):
         for section in data.fx.sections:
             if not section.items:
                 continue
-            box = QGroupBox(section.label)
-            lay = QVBoxLayout(box)
             table = make_table(["Game", "Progress", "Hours", "Note"])
             table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
             table.setColumnWidth(1, 180)
             table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-            table.verticalHeader().setDefaultSectionSize(28)
             table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             fill_table(table, [[i.name or i.raw, None,
                                 P.fmt_num(i.hours, 1) + "h" if i.hours is not None else "", i.note]
@@ -366,9 +539,8 @@ class InProgressTab(Tab):
                     bar.setFormat(f"{item.percent}%")
                     bar.setAlignment(Qt.AlignCenter)
                     table.setCellWidget(r, 1, bar)
-            table.setFixedHeight(table.horizontalHeader().height() + 28 * len(section.items) + 4)
-            lay.addWidget(table)
-            self.groups.addWidget(box)
+            table.setFixedHeight(table.horizontalHeader().height() + ROW_HEIGHT * len(section.items) + 4)
+            self.groups.addWidget(group_box(section.label, table))
         self.groups.addStretch(1)
 
 
@@ -379,17 +551,10 @@ class AutoLogTab(Tab):
         super().__init__(win)
         cards = QHBoxLayout()
         self.values = {}
+        cards.setSpacing(12)
         for name in ("This week", "This month", "This year"):
-            card = QFrame()
-            card.setFrameShape(QFrame.StyledPanel)
-            lay = QVBoxLayout(card)
-            value = QLabel("0m")
-            value.setAlignment(Qt.AlignCenter)
-            value.setStyleSheet("font-size: 26px; font-weight: bold;")
-            caption = QLabel(name)
-            caption.setAlignment(Qt.AlignCenter)
-            lay.addWidget(value)
-            lay.addWidget(caption)
+            card, value = make_card(name)
+            value.setText("0m")
             cards.addWidget(card)
             self.values[name] = value
         self.body.addLayout(cards)
@@ -421,6 +586,14 @@ class RecapTab(Tab):
         self.copy_btn.clicked.connect(self.copy)
         row.addWidget(self.copy_btn)
         self.body.addLayout(row)
+        cards = QHBoxLayout()
+        cards.setSpacing(12)
+        self.cards = {}
+        for name in ("Story games", "Car games", "Known hours"):
+            card, value = make_card(name)
+            cards.addWidget(card)
+            self.cards[name] = value
+        self.body.addLayout(cards)
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         self.body.addWidget(self.text, 1)
@@ -433,6 +606,12 @@ class RecapTab(Tab):
     def render(self):
         key = self.combo.currentData()
         self.text.setPlainText("" if key is None else P.recap_text(key, self.data.fx, self.data.sessions))
+        story = [x for x in self.data.fx.story if x.year == key]
+        known = [x for x in story if x.hours is not None]
+        approx = "~" if any(x.estimate for x in known) else ""
+        self.cards["Story games"].setText(str(len(story)))
+        self.cards["Car games"].setText(str(sum(1 for c in self.data.fx.cars if c.year == key)))
+        self.cards["Known hours"].setText(f"{approx}{P.fmt_num(sum(x.hours for x in known), 1)}h")
 
     def copy(self):
         QApplication.clipboard().setText(self.text.toPlainText())
@@ -445,17 +624,26 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Game Hours")
+        self.setWindowIcon(load_icon())
         self.resize(1100, 760)
         self.settings = load_settings()
 
         central = QWidget()
         root = QVBoxLayout(central)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
         header = QHBoxLayout()
+        header.setSpacing(12)
+        logo = QLabel()
+        logo.setPixmap(load_icon().pixmap(32, 32))
+        header.addWidget(logo)
         title = QLabel("Game Hours")
-        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        title.setObjectName("Title")
         header.addWidget(title)
         header.addStretch(1)
         refresh = QPushButton("Refresh")
+        refresh.setObjectName("Accent")
+        refresh.setCursor(Qt.PointingHandCursor)
         refresh.clicked.connect(self.refresh)
         header.addWidget(refresh)
         root.addLayout(header)
@@ -490,21 +678,30 @@ class MainWindow(QMainWindow):
 
 def apply_dark_theme(app: QApplication) -> None:
     app.setStyle("Fusion")
+    app.setFont(QFont("Segoe UI", 10))
     pal = QPalette()
     for role, color in (
-        (QPalette.Window, "#2b2b2b"), (QPalette.WindowText, "#e6e6e6"),
-        (QPalette.Base, "#1e1e1e"), (QPalette.AlternateBase, "#262626"),
-        (QPalette.Text, "#e6e6e6"), (QPalette.Button, "#3a3a3a"),
-        (QPalette.ButtonText, "#e6e6e6"), (QPalette.ToolTipBase, "#3a3a3a"),
-        (QPalette.ToolTipText, "#e6e6e6"), (QPalette.Highlight, "#2f6fb5"),
-        (QPalette.HighlightedText, "#ffffff"), (QPalette.PlaceholderText, "#888888"),
+        (QPalette.Window, BG), (QPalette.WindowText, TEXT),
+        (QPalette.Base, PANEL), (QPalette.AlternateBase, ALT),
+        (QPalette.Text, TEXT), (QPalette.Button, PANEL),
+        (QPalette.ButtonText, TEXT), (QPalette.ToolTipBase, PANEL),
+        (QPalette.ToolTipText, TEXT), (QPalette.Highlight, ACCENT),
+        (QPalette.HighlightedText, "#FFFFFF"), (QPalette.PlaceholderText, MUTED),
     ):
         pal.setColor(role, QColor(color))
     app.setPalette(pal)
+    app.setStyleSheet(STYLE)
 
 
 def main() -> int:
+    if os.name == "nt":  # own taskbar identity, so the taskbar shows our icon, not Python's
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GameHours.App")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
+    app.setWindowIcon(load_icon())
     apply_dark_theme(app)
     win = MainWindow()
     win.show()
